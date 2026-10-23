@@ -132,6 +132,28 @@ def synth_ekho(text, out, speed):
     subprocess.run(cmd + [text], check=True, cwd=ROOT)
 
 
+TRANSLATE_PROMPT = ("Translate the English into colloquial spoken Cantonese written in traditional Chinese characters, "
+                    "as a Taishanese speaker would say it. Output only the Chinese, nothing else.")
+
+
+def translate_english(text, model):
+    """English -> written Cantonese via Simon Willison's `llm` CLI (any configured model, local or cloud)."""
+    # Two llm installs live on this Mac; the pipx one (~/.local/bin/llm) has the Ollama/LM Studio plugins,
+    # the pyenv one does not. Prefer the pipx one unless $TOISANESE_LLM_BIN says otherwise.
+    llm = os.environ.get("TOISANESE_LLM_BIN") or (
+        os.path.expanduser("~/.local/bin/llm") if os.access(os.path.expanduser("~/.local/bin/llm"), os.X_OK) else shutil.which("llm"))
+    if not llm:
+        sys.exit("llm not found: pipx install llm (and a model plugin such as llm-ollama)")
+    r = subprocess.run([llm, "-m", model, "-s", TRANSLATE_PROMPT, text], capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL)  # llm reads stdin when it is not a tty; without this it hangs
+    if r.returncode != 0:
+        sys.exit(f"llm failed ({model}): {r.stderr.strip()[:200]}")
+    out = "".join(r.stdout.split())
+    if not out:
+        sys.exit(f"llm returned nothing ({model})")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("text")
@@ -142,7 +164,15 @@ def main():
     ap.add_argument("--pause", type=float, default=0.3, help="clips engine: seconds of silence at punctuation/spaces")
     ap.add_argument("-s", "--speed", type=int, default=0, help="ekho engine: delta speed -50..300 (percent)")
     ap.add_argument("--no-play", action="store_true")
+    ap.add_argument("--en", "--english", action="store_true",
+                    help="treat TEXT as English: translate to colloquial Cantonese first (via the `llm` CLI), then speak")
+    ap.add_argument("--model", default=os.environ.get("TOISANESE_LLM", "gemma4:latest"),
+                    help="llm model for --en (default: $TOISANESE_LLM or gemma4:latest, a local Ollama model)")
     a = ap.parse_args()
+
+    if a.en:
+        a.text = translate_english(a.text, a.model)
+        print(f"[{a.model}] {a.text}", file=sys.stderr)
 
     chars, phrases = load_list()
     text, swapped, missing = normalize(a.text, chars)
